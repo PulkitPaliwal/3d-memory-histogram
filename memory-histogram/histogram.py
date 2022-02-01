@@ -27,6 +27,7 @@ class histogram:
         self.xyzdistance = np.zeros((90000,1)) 
         self.xyd = np.zeros((90000,1))
         self.xyz = np.zeros((90000,3))
+        self.coordinateGlobal = []
         rospy.init_node('pclnode', anonymous=True)
         rospy.Subscriber("/camera/depth/points", PointCloud2, self.callback)
     
@@ -36,14 +37,13 @@ class histogram:
        
 
     def build(self):
-       
+    
         np.set_printoptions(threshold = np.inf)
         
         t = time.time()
-        self.xyz = np.round(self.xyz, decimals=2)
         #print(self.xyz)
-        self.xyzdistance = np.round(np.sqrt((self.xyz[:,0]*self.xyz[:,0])+(self.xyz[:,1]*self.xyz[:,1])+(self.xyz[:,2]*self.xyz[:,2])), decimals =2u)
-        self.xyd = np.round(np.sqrt((self.xyz[:,0]*self.xyz[:,0])+(self.xyz[:,1]*self.xyz[:,1])), decimals = 2 )     
+        self.xyzdistance = np.sqrt((self.xyz[:,0]*self.xyz[:,0])+(self.xyz[:,1]*self.xyz[:,1])+(self.xyz[:,2]*self.xyz[:,2]))
+        self.xyd = np.sqrt((self.xyz[:,0]*self.xyz[:,0])+(self.xyz[:,1]*self.xyz[:,1]))  
        
 
         print('generated dxyz in:')
@@ -51,66 +51,38 @@ class histogram:
         t =time.time()
 
         i = 0
-        self.epsilon = np.arctan2(self.xyz[:,1],self.xyz[:,0]) + np.pi
-        self.epsilon = np.floor((180*self.epsilon) / (self.res*np.pi))
-        self.epsilon = ((self.epsilon + self.res - (self.epsilon%self.res))/self.res - 1).astype(int)
-        self.tau = np.floor(180*np.arctan2(self.xyz[:,2],self.xyd[:]) / (self.res*np.pi)) +90
-        self.tau = ((self.tau + self.res - (self.tau % self.res))/self.res - 1).astype(int)
-     
+        self.polar[:,0] = np.arctan2(self.xyz[:,1],self.xyz[:,0]) + np.pi
+        self.polar[:,0] = np.floor((180*self.polar[:,0]) / (self.res*np.pi))+ 180
+        self.polar[:,0] = (self.polar[:,0] + self.res - (self.polar[:,0]%self.res))/self.res - 1
+        self.polar[:,1] = np.floor(180*np.arctan2(self.xyz[:,2],self.xyd[:]) / (self.res*np.pi)) +90
+        self.polar[:,1] = (self.polar[:,1] + self.res - (self.polar[:,1] % self.res))/self.res - 1
+        self.polar = self.polar.astype(int)
+
         print('generated indices in:')
         print((time.time()-t))
-        #self.index = self.index.astype(int)
-        t = time.time()
-        #print(self.index)
-        maxEp   = np.int((np.max(self.epsilon)))
-        minEp   = np.int((np.min(self.epsilon)))
-        maxTau  = np.int((np.max(self.tau)))
-        minTau  = np.int((np.min(self.tau)))
-        
-        print(minEp, maxEp, minTau, maxTau)
-        x=0
-        # build bin layer
-        for epsIndex in range(maxEp+1):
-            for tauIndex in range(maxTau+1):
-                if(epsIndex in self.epsilon):
-                    if(tauIndex in self.tau):
-                        self.bin[epsIndex,tauIndex] = 1
-                        x+=1
-                        
-        #print(self.bin)
-        print('generated bin in:')
-        print((time.time()-t))
-        t = time.time()
-        l = 0
-        k = 0
-        y=0
-        # build distance layer
 
-        for epsIndex in range(maxEp+1):
-            for tauIndex in range(maxTau+1):
-                if(self.bin[epsIndex,tauIndex] == 1):
-                    for d in self.xyzdistance:
-                        if(((self.epsilon[k]==epsIndex)) and ((self.tau[k] ==tauIndex))):
-                            self.distance[epsIndex,tauIndex] = self.distance[epsIndex,tauIndex] + d
-                            l += 1
-                        k += 1
-                    if(l!=0):
-                        self.distance[epsIndex,tauIndex] = self.distance[epsIndex,tauIndex]/l
-                        #print('Balle Balle')
-                        y+=1
-                    l = 0
-                    k = 0
-        print("generated distance in:")
-        print(time.time()-t)
-        #print(self.distance)
-        #if(x==y):
-        #    print('BASED')
+        t = time.time()
+        for angle in np.unique(self.polar,axis = 0):
+            self.bin[angle[0],angle[1]] = True
+            self.count[angle[0],angle[1]] = 0
+        for index,angle in enumerate(self.polar):
+            #self.bin[angle[0],angle[1]] = True
+            self.count[angle[0],angle[1]] = self.count[angle[0],angle[1]] + 1
+            self.distance[angle[0],angle[1]] = self.distance[angle[0],angle[1]] + self.xyzdistance[index]
+        self.distance = self.distance/self.count
+        #np.savetxt("ok.txt",np.extract(self.distance !=0,self.distance)) 
+        #np.savetxt("ok2.txt",np.nonzero(self.distance))    
+        #print(self.bin)
+        print('generated in:')
+        print((time.time()-t))
 
 
     def update(self, posOld, posNew):
         resolution = self.res
         # now we will update the position of the points
-        coordinateGlobal = []
+        print("Running Update")
+        t=time.time()
+        
         for epsilonInd in range(360/self.res):
             for tauInd in range(180/self.res):
                 corners = [
@@ -119,12 +91,13 @@ class histogram:
                     [epsilonInd*self.res-self.res/2, tauInd*self.res+self.res/2],
                     [epsilonInd*self.res+self.res/2, tauInd*self.res+self.res/2]
                 ]
-                #fix this
-                coordinateGlobal.append(getCoor(posOld, corners[:,0], corners[:,1] ,self.distance(epsilonInd,tauInd)))
-
+                corners=np.array(corners)
+                print(np.shape(corners))
+                self.coordinateGlobal.append(getCoor(posOld, corners[:,0], corners[:,1] ,self.distance[epsilonInd,tauInd]))
+                
         # half resolution build
         updatedAndDownSampled = histogram(2*self.res)
-        coordinateGlobal = np.round(np.array(coordinateGlobal), decimals =2)
+        print(np.shape(self.coordinateGlobal))
         updatedAndDownSampled_xyzdistance = np.round(np.sqrt((self.coordinateGlobal[:,0]-posNew[0])*(self.coordinateGlobal[:,0]-posNew[0])
         +(self.coordinateGlobal[:,1]-posNew[1])*(self.coordinateGlobal[:,1]-posNew[1])+
         (self.coordinateGlobal[:,2]-posNew[2])*(self.coordinateGlobal[:,2]-posNew[2])), decimals=2)
@@ -133,12 +106,14 @@ class histogram:
         +(self.coordinateGlobal[:,1]-posNew[1])*(self.coordinateGlobal[:,1]-posNew[1]) ), decimals =2)
 
         # the usual build with 6-point implementation
-        updatedAndDownSampled_index = np.zeros(coordinateGlobal.shape[0])
+        n = np.array(self.coordinateGlobal.shape)
+        updatedAndDownSampled_index = np.zeros((n[0],2))
 
-        updatedAndDownSampled.epsilon = np.floor(np.arctan((updatedAndDownSampled.coordinateGlobal[:,0]-posNew[0])/(updatedAndDownSampled.coordinateGlobal[:,1]-posNew[1])) / updatedAndDownSampled.res)
+        updatedAndDownSampled.epsilon = np.floor(np.arctan2((self.coordinateGlobal[:,0]-posNew[0]),(self.coordinateGlobal[:,1]-posNew[1])) / updatedAndDownSampled.res)
+        #print(np.shape(updatedAndDownSampled.epsilon))
         updatedAndDownSampled_index[:,0] = ((updatedAndDownSampled.epsilon + updatedAndDownSampled.res - updatedAndDownSampled.epsilon%updatedAndDownSampled.res)/updatedAndDownSampled.res - 1).astype(int)
 
-        updatedAndDownSampled.tau = np.floor(180*np.arctan((updatedAndDownSampled.xyz[:,2]-posNew[2])/updatedAndDownSampled_dxy[:]) / updatedAndDownSampled.res /PI) + 90
+        updatedAndDownSampled.tau = np.floor(180*np.arctan2((updatedAndDownSampled.xyz[:,2]-posNew[2]),updatedAndDownSampled_dxy[:]) / updatedAndDownSampled.res /PI) + 90
         updatedAndDownSampled_index[:,1] = ((updatedAndDownSampled.tau + updatedAndDownSampled.res - updatedAndDownSampled.tau%updatedAndDownSampled.res)/updatedAndDownSampled.res - 1).astype(int)
 
         # build bin layer
@@ -151,12 +126,14 @@ class histogram:
         # build distance layer
         for epsIndex in range(360/updatedAndDownSampled.res):
             for tauIndex in range(180/updatedAndDownSampled.res):
-                for d in updatedAndDownSampled_xyzdistance:
-                    if(updatedAndDownSampled_index[k,:]== (epsIndex,tauIndex)):
-                        updatedAndDownSampled.distance[epsIndex,tauIndex] = updatedAndDownSampled.distance[epsIndex,tauIndex] + d
-                        k = k + 1
-                updatedAndDownSampled.distance[epsIndex,tauIndex] = updatedAndDownSampled.distance[epsIndex,tauIndex]/k
-                k = 0
+                if (np.count_nonzero(updatedAndDownSampled_index[:,0] == epsIndex) >= 6):
+                    if (np.count_nonzero(updatedAndDownSampled_index[:,1] == tauIndex) >= 6):
+                        for d in updatedAndDownSampled_xyzdistance:
+                            if(updatedAndDownSampled_index[k,:]== (epsIndex,tauIndex)):
+                                updatedAndDownSampled.distance[epsIndex,tauIndex] = updatedAndDownSampled.distance[epsIndex,tauIndex] + d
+                                k = k + 1
+                        updatedAndDownSampled.distance[epsIndex,tauIndex] = updatedAndDownSampled.distance[epsIndex,tauIndex]/k
+                        k = 0
         # change age
         self.age = self.age + 1
 
@@ -177,6 +154,8 @@ class histogram:
                 upSampled.bin[2*epsilon, 2*tau+1] = updatedAndDownSampled.bin[epsilon,tau]
                 upSampled.bin[2*epsilon+1, 2*tau] = updatedAndDownSampled.bin[epsilon,tau]
                 upSampled.bin[(2*epsilon+1), (2*tau+1)] = updatedAndDownSampled.bin[epsilon,tau]
+        print("Updated")
+        print("Process took", t-time.time())
         return upSampled
 
 def merge(currentHistogram, memoryHistogram, HFOV, VFOV):
@@ -228,7 +207,7 @@ def merge(currentHistogram, memoryHistogram, HFOV, VFOV):
 memoryHistogram = histogram(defResolution)
 time.sleep(5)
 memoryHistogram.build()
-
+#memoryHistogram.update([0,0,0],[0,0,5])
 prevPos = [0,0,0]
 currPos = [0,0,0]
 
